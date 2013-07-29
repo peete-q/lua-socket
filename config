@@ -61,14 +61,14 @@ INSTALL_EXEC=cp
 SOCKET_SO= socket/core.dll
 MIME_SO= mime/core.dll
 
-LUAINC= -I../../include
-LUALIB= -L../../lib
+LUAINC= -I../../include -I../../binary
+LUALIB= -L../../lib -L../../binary
 CC=gcc
 DEF=-DLUASOCKET_DEBUG 
 CFLAGS= $(LUAINC) $(DEF) -pedantic -Wall -g
-LDFLAGS= -lmingw32 -shared $(LUALIB)
+LDFLAGS= -lmingw32 --share -shared $(LUALIB)
 LD=gcc
-LIBS= -llua51 -lws2_32
+LIBS= -llua51 -lws2_32 -lbinary
 
 #------
 # End of makefile configuration

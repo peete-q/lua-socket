@@ -33,6 +33,7 @@ typedef struct t_buffer_ {
     p_timeout tm;           /* timeout management for this buffer */
 	size_t first, last;     /* index of first and last bytes of stored data */
 	char data[BUF_SIZE];    /* storage space for buffer data */
+	void* userdata;
 } t_buffer;
 typedef t_buffer *p_buffer;
 

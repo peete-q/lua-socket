@@ -8,6 +8,7 @@
 #include "lauxlib.h"
 
 #include "buffer.h"
+#include "binary.h"
 
 /*=========================================================================*\
 * Internal function prototypes
@@ -18,6 +19,8 @@ static int recvall(p_buffer buf, luaL_Buffer *b);
 static int buffer_get(p_buffer buf, const char **data, size_t *count);
 static void buffer_skip(p_buffer buf, size_t count);
 static int sendraw(p_buffer buf, const char *data, size_t count, size_t *sent);
+static int recvpack(lua_State *L, p_buffer buf);
+static int sendpack(lua_State *L, p_buffer buf);
 
 /* min and max macros */
 #ifndef MIN
@@ -26,6 +29,16 @@ static int sendraw(p_buffer buf, const char *data, size_t count, size_t *sent);
 #ifndef MAX
 #define MAX(x, y) ((x) > (y) ? x : y)
 #endif
+
+typedef struct t_userdata_ {
+	struct buffer* outgoing;
+	size_t sent;
+	size_t index;
+	size_t size;
+	char buffer[1];
+} t_userdata;
+
+#define HEADSIZE sizeof(size_t)
 
 /*=========================================================================*\
 * Exported functions
@@ -47,6 +60,13 @@ void buffer_init(p_buffer buf, p_io io, p_timeout tm) {
     buf->tm = tm;
     buf->received = buf->sent = 0;
     buf->birthday = timeout_gettime();
+	
+	t_userdata* userdata = (t_userdata*)malloc(sizeof(t_userdata) + BUF_SIZE);
+	userdata->outgoing = buffer_new(BUF_SIZE);
+	userdata->sent = 0;
+	userdata->index = 0;
+	userdata->size = BUF_SIZE;
+	buf->userdata = userdata;
 }
 
 /*-------------------------------------------------------------------------*\
@@ -77,15 +97,23 @@ int buffer_meth_send(lua_State *L, p_buffer buf) {
     int top = lua_gettop(L);
     int err = IO_DONE;
     size_t size = 0, sent = 0;
-    const char *data = luaL_checklstring(L, 2, &size);
-    long start = (long) luaL_optnumber(L, 3, 1);
-    long end = (long) luaL_optnumber(L, 4, -1);
+	const char *data;
+	long start = 1, end = -1;
     p_timeout tm = timeout_markstart(buf->tm);
-    if (start < 0) start = (long) (size+start+1);
-    if (end < 0) end = (long) (size+end+1);
-    if (start < 1) start = (long) 1;
-    if (end > (long) size) end = (long) size;
-    if (start <= end) err = sendraw(buf, data+start-1, end-start+1, &sent);
+	if (lua_istable(L, 2)) {
+		err = sendpack(L, buf);
+	}
+	else {
+		data = luaL_checklstring(L, 2, &size);
+		start = (long) luaL_optnumber(L, 3, 1);
+		end = (long) luaL_optnumber(L, 4, -1);
+		
+		if (start < 0) start = (long) (size+start+1);
+		if (end < 0) end = (long) (size+end+1);
+		if (start < 1) start = (long) 1;
+		if (end > (long) size) end = (long) size;
+		if (start <= end) err = sendraw(buf, data+start-1, end-start+1, &sent);
+	}
     /* check if there was an error */
     if (err != IO_DONE) {
         lua_pushnil(L);
@@ -117,7 +145,10 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
     luaL_buffinit(L, &b);
     luaL_addlstring(&b, part, size);
     /* receive new patterns */
-    if (!lua_isnumber(L, 2)) {
+    if (top == 1) {
+		err = recvpack(L, buf);
+    }
+	else if (!lua_isnumber(L, 2)) {
         const char *p= luaL_optstring(L, 2, "*l");
         if (p[0] == '*' && p[1] == 'l') err = recvline(buf, &b);
         else if (p[0] == '*' && p[1] == 'a') err = recvall(buf, &b); 
@@ -129,7 +160,7 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
     if (err != IO_DONE) {
         /* we can't push anyting in the stack before pushing the
          * contents of the buffer. this is the reason for the complication */
-        luaL_pushresult(&b);
+        if (top > 1) luaL_pushresult(&b);
         lua_pushstring(L, buf->io->error(buf->io->ctx, err)); 
         lua_pushvalue(L, -2); 
         lua_pushnil(L);
@@ -173,6 +204,68 @@ static int sendraw(p_buffer buf, const char *data, size_t count, size_t *sent) {
     }
     *sent = total;
     buf->sent += total;
+    return err;
+}
+
+static int sendpack(lua_State *L, p_buffer buf) {
+    int err = IO_DONE;
+	t_userdata* userdata = (t_userdata*)buf->userdata;
+	size_t sent = 0;
+	
+	if (buffer_tell(userdata->outgoing) == 0 || buffer_tell(userdata->outgoing) == userdata->sent) {
+		size_t size;
+		userdata->sent = 0;
+		buffer_seek(userdata->outgoing, HEADSIZE);
+		binary_pack(L, userdata->outgoing, 2, 1);
+		size = buffer_tell(userdata->outgoing) - HEADSIZE;
+		buffer_write(userdata->outgoing, 0, &size, HEADSIZE);
+	}
+	
+	err = sendraw(buf, 
+		buffer_pointer(userdata->outgoing) + userdata->sent,
+		buffer_tell(userdata->outgoing) - userdata->sent,
+		&sent);
+	userdata->sent += sent;
+	if (err == IO_CLOSED || err == IO_UNKNOWN)
+		buffer_seek(userdata->outgoing, 0);
+	return err;
+}
+
+/*-------------------------------------------------------------------------*\
+* Reads a package
+\*-------------------------------------------------------------------------*/
+static int recvpack(lua_State *L, p_buffer buf) {
+    int err = IO_DONE;
+    p_io io = buf->io;
+    p_timeout tm = buf->tm;
+	t_userdata* userdata = (t_userdata*)buf->userdata;
+	
+    while (err == IO_DONE) {
+        size_t got, wanted;
+		if (userdata->index < HEADSIZE) {
+			err = io->recv(io->ctx, userdata->buffer + userdata->index, HEADSIZE - userdata->index, &got, tm);
+			userdata->index += got;
+			buf->received += got;
+		}
+		else {
+			wanted = *(size_t*)userdata->buffer;
+			if (userdata->size < HEADSIZE + wanted) {
+				userdata = (t_userdata*)realloc(userdata, sizeof(t_userdata) + HEADSIZE + wanted);
+				userdata->size = HEADSIZE + wanted;
+				buf->userdata = userdata;
+			}
+			err = io->recv(io->ctx, userdata->buffer + userdata->index, wanted + HEADSIZE - userdata->index, &got, tm);
+			userdata->index += got;
+			buf->received += got;
+			if (userdata->index >= HEADSIZE + wanted) {
+				binary_unpack(L, userdata->buffer + HEADSIZE, wanted);
+				userdata->index = 0;
+				break;
+			}
+		}
+    }
+	if (err == IO_CLOSED || err == IO_UNKNOWN)
+		userdata->index = 0;
     return err;
 }
 
