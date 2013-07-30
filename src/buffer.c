@@ -77,7 +77,7 @@ int buffer_meth_getstats(lua_State *L, p_buffer buf) {
     lua_pushnumber(L, timeout_gettime() - buf->birthday);
     lua_pushnumber(L, buffer_size(userdata->incoming));
     lua_pushnumber(L, buffer_size(userdata->outgoing));
-    return 3;
+    return 5;
 }
 
 /*-------------------------------------------------------------------------*\
@@ -141,11 +141,6 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
     size_t size;
     const char *part = luaL_optlstring(L, 3, "", &size);
     p_timeout tm = timeout_markstart(buf->tm);
-    /* initialize buffer with optional extra prefix 
-     * (useful for concatenating previous partial results) */
-    luaL_buffinit(L, &b);
-    luaL_addlstring(&b, part, size);
-    /* receive new patterns */
     if (top == 1) {
 		err = recvpack(L, buf);
 		if (err != IO_DONE) {
@@ -158,6 +153,11 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
 		}
 		goto end;
     }
+    /* initialize buffer with optional extra prefix 
+     * (useful for concatenating previous partial results) */
+    luaL_buffinit(L, &b);
+    luaL_addlstring(&b, part, size);
+    /* receive new patterns */
 	if (!lua_isnumber(L, 2)) {
         const char *p= luaL_optstring(L, 2, "*l");
         if (p[0] == '*' && p[1] == 'l') err = recvline(buf, &b);
