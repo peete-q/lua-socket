@@ -19,8 +19,8 @@ static int recvall(p_buffer buf, luaL_Buffer *b);
 static int buffer_get(p_buffer buf, const char **data, size_t *count);
 static void buffer_skip(p_buffer buf, size_t count);
 static int sendraw(p_buffer buf, const char *data, size_t count, size_t *sent);
-static int recvpack(lua_State *L, p_buffer buf);
-static int sendpack(lua_State *L, p_buffer buf);
+static int recvpack(lua_State *L, p_buffer buf, size_t *size);
+static int sendpack(lua_State *L, p_buffer buf, size_t *sent);
 
 /* min and max macros */
 #ifndef MIN
@@ -102,7 +102,7 @@ int buffer_meth_send(lua_State *L, p_buffer buf) {
 	long start = 1, end = -1;
     p_timeout tm = timeout_markstart(buf->tm);
 	if (lua_istable(L, 2)) {
-		err = sendpack(L, buf);
+		err = sendpack(L, buf, &sent);
 		goto end;
 	}
 	data = luaL_checklstring(L, 2, &size);
@@ -142,14 +142,14 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
     const char *part = luaL_optlstring(L, 3, "", &size);
     p_timeout tm = timeout_markstart(buf->tm);
     if (top == 1) {
-		err = recvpack(L, buf);
+		err = recvpack(L, buf, &size);
 		if (err != IO_DONE) {
 			lua_pushnil(L);
 			lua_pushstring(L, buf->io->error(buf->io->ctx, err));
 			lua_pushnil(L);
 		} else {
 			lua_pushnil(L);
-			lua_pushnil(L);
+			lua_pushnumber(L, size);
 		}
 		goto end;
     }
@@ -218,10 +218,9 @@ static int sendraw(p_buffer buf, const char *data, size_t count, size_t *sent) {
     return err;
 }
 
-static int sendpack(lua_State *L, p_buffer buf) {
+static int sendpack(lua_State *L, p_buffer buf, size_t *sent) {
     int err = IO_DONE;
 	t_userdata* userdata = (t_userdata*)buf->userdata;
-	size_t sent = 0;
 	
 	if (buffer_tell(userdata->outgoing) == 0 || buffer_tell(userdata->outgoing) == userdata->sent) {
 		size_t size;
@@ -235,15 +234,15 @@ static int sendpack(lua_State *L, p_buffer buf) {
 	err = sendraw(buf, 
 		buffer_pointer(userdata->outgoing) + userdata->sent,
 		buffer_tell(userdata->outgoing) - userdata->sent,
-		&sent);
-	userdata->sent += sent;
+		sent);
+	userdata->sent += *sent;
 	return err;
 }
 
 /*-------------------------------------------------------------------------*\
 * Reads a package
 \*-------------------------------------------------------------------------*/
-static int recvpack(lua_State *L, p_buffer buf) {
+static int recvpack(lua_State *L, p_buffer buf, size_t *size) {
     int err = IO_DONE;
     p_io io = buf->io;
     p_timeout tm = buf->tm;
@@ -267,6 +266,7 @@ static int recvpack(lua_State *L, p_buffer buf) {
 			if (buffer_tell(userdata->incoming) >= HEADSIZE + bodysize) {
 				binary_unpack(L, buffer_pointer(userdata->incoming) + HEADSIZE, bodysize);
 				buffer_seek(userdata->incoming, 0);
+				*size = HEADSIZE + bodysize;
 				break;
 			}
 		}

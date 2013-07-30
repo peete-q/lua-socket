@@ -61,8 +61,8 @@ INSTALL_EXEC=cp
 SOCKET_SO= socket/core.dll
 MIME_SO= mime/core.dll
 
-LUAINC= -I../../include -I../../binary
-LUALIB= -L../../lib -L../../binary
+LUAINC= -I../../include -I../../lua-binary
+LUALIB= -L../../lib -L../../lua-binary
 CC=gcc
 DEF=-DLUASOCKET_DEBUG 
 CFLAGS= $(LUAINC) $(DEF) -pedantic -Wall -g
