@@ -102,18 +102,18 @@ int buffer_meth_send(lua_State *L, p_buffer buf) {
     p_timeout tm = timeout_markstart(buf->tm);
 	if (lua_istable(L, 2)) {
 		err = sendpack(L, buf);
+		goto end;
 	}
-	else {
-		data = luaL_checklstring(L, 2, &size);
-		start = (long) luaL_optnumber(L, 3, 1);
-		end = (long) luaL_optnumber(L, 4, -1);
-		
-		if (start < 0) start = (long) (size+start+1);
-		if (end < 0) end = (long) (size+end+1);
-		if (start < 1) start = (long) 1;
-		if (end > (long) size) end = (long) size;
-		if (start <= end) err = sendraw(buf, data+start-1, end-start+1, &sent);
-	}
+	data = luaL_checklstring(L, 2, &size);
+	start = (long) luaL_optnumber(L, 3, 1);
+	end = (long) luaL_optnumber(L, 4, -1);
+	
+	if (start < 0) start = (long) (size+start+1);
+	if (end < 0) end = (long) (size+end+1);
+	if (start < 1) start = (long) 1;
+	if (end > (long) size) end = (long) size;
+	if (start <= end) err = sendraw(buf, data+start-1, end-start+1, &sent);
+end:
     /* check if there was an error */
     if (err != IO_DONE) {
         lua_pushnil(L);
@@ -147,8 +147,17 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
     /* receive new patterns */
     if (top == 1) {
 		err = recvpack(L, buf);
+		if (err != IO_DONE) {
+			lua_pushnil(L);
+			lua_pushstring(L, buf->io->error(buf->io->ctx, err));
+			lua_pushnil(L);
+		} else {
+			lua_pushnil(L);
+			lua_pushnil(L);
+		}
+		goto end;
     }
-	else if (!lua_isnumber(L, 2)) {
+	if (!lua_isnumber(L, 2)) {
         const char *p= luaL_optstring(L, 2, "*l");
         if (p[0] == '*' && p[1] == 'l') err = recvline(buf, &b);
         else if (p[0] == '*' && p[1] == 'a') err = recvall(buf, &b); 
@@ -160,7 +169,7 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
     if (err != IO_DONE) {
         /* we can't push anyting in the stack before pushing the
          * contents of the buffer. this is the reason for the complication */
-        if (top > 1) luaL_pushresult(&b);
+        luaL_pushresult(&b);
         lua_pushstring(L, buf->io->error(buf->io->ctx, err)); 
         lua_pushvalue(L, -2); 
         lua_pushnil(L);
@@ -170,6 +179,7 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
         lua_pushnil(L);
         lua_pushnil(L);
     }
+end:
 #ifdef LUASOCKET_DEBUG
     /* push time elapsed during operation as the last return value */
     lua_pushnumber(L, timeout_gettime() - timeout_getstart(tm));
@@ -226,8 +236,6 @@ static int sendpack(lua_State *L, p_buffer buf) {
 		buffer_tell(userdata->outgoing) - userdata->sent,
 		&sent);
 	userdata->sent += sent;
-	if (err == IO_CLOSED || err == IO_UNKNOWN)
-		buffer_seek(userdata->outgoing, 0);
 	return err;
 }
 
@@ -264,8 +272,6 @@ static int recvpack(lua_State *L, p_buffer buf) {
 			}
 		}
     }
-	if (err == IO_CLOSED || err == IO_UNKNOWN)
-		userdata->index = 0;
     return err;
 }
 
