@@ -32,13 +32,12 @@ static int sendpack(lua_State *L, p_buffer buf);
 
 typedef struct t_userdata_ {
 	struct buffer* outgoing;
+	struct buffer* incoming;
 	size_t sent;
-	size_t index;
-	size_t size;
-	char buffer[1];
 } t_userdata;
 
 #define HEADSIZE sizeof(size_t)
+#define INITSIZE 256
 
 /*=========================================================================*\
 * Exported functions
@@ -61,11 +60,10 @@ void buffer_init(p_buffer buf, p_io io, p_timeout tm) {
     buf->received = buf->sent = 0;
     buf->birthday = timeout_gettime();
 	
-	t_userdata* userdata = (t_userdata*)malloc(sizeof(t_userdata) + BUF_SIZE);
-	userdata->outgoing = buffer_new(BUF_SIZE);
+	t_userdata* userdata = (t_userdata*)malloc(sizeof(t_userdata) + INITSIZE);
 	userdata->sent = 0;
-	userdata->index = 0;
-	userdata->size = BUF_SIZE;
+	userdata->outgoing = buffer_new(INITSIZE);
+	userdata->incoming = buffer_new(INITSIZE);
 	buf->userdata = userdata;
 }
 
@@ -73,9 +71,12 @@ void buffer_init(p_buffer buf, p_io io, p_timeout tm) {
 * object:getstats() interface
 \*-------------------------------------------------------------------------*/
 int buffer_meth_getstats(lua_State *L, p_buffer buf) {
+	t_userdata* userdata = (t_userdata*)buf->userdata;
     lua_pushnumber(L, buf->received);
     lua_pushnumber(L, buf->sent);
     lua_pushnumber(L, timeout_gettime() - buf->birthday);
+    lua_pushnumber(L, buffer_size(userdata->incoming));
+    lua_pushnumber(L, buffer_size(userdata->outgoing));
     return 3;
 }
 
@@ -249,25 +250,23 @@ static int recvpack(lua_State *L, p_buffer buf) {
 	t_userdata* userdata = (t_userdata*)buf->userdata;
 	
     while (err == IO_DONE) {
-        size_t got, wanted;
-		if (userdata->index < HEADSIZE) {
-			err = io->recv(io->ctx, userdata->buffer + userdata->index, HEADSIZE - userdata->index, &got, tm);
-			userdata->index += got;
+        size_t pos, got, bodysize;
+		if (buffer_tell(userdata->incoming) < HEADSIZE) {
+			pos = buffer_tell(userdata->incoming);
+			err = io->recv(io->ctx, buffer_pointer(userdata->incoming) + pos, HEADSIZE - pos, &got, tm);
+			buffer_forward(userdata->incoming, got);
 			buf->received += got;
 		}
 		else {
-			wanted = *(size_t*)userdata->buffer;
-			if (userdata->size < HEADSIZE + wanted) {
-				userdata = (t_userdata*)realloc(userdata, sizeof(t_userdata) + HEADSIZE + wanted);
-				userdata->size = HEADSIZE + wanted;
-				buf->userdata = userdata;
-			}
-			err = io->recv(io->ctx, userdata->buffer + userdata->index, wanted + HEADSIZE - userdata->index, &got, tm);
-			userdata->index += got;
+			bodysize = *(size_t*)buffer_pointer(userdata->incoming);
+			pos = buffer_tell(userdata->incoming);
+			buffer_checksize(userdata->incoming, HEADSIZE + bodysize);
+			err = io->recv(io->ctx, buffer_pointer(userdata->incoming) + pos, bodysize + HEADSIZE - pos, &got, tm);
+			buffer_forward(userdata->incoming, got);
 			buf->received += got;
-			if (userdata->index >= HEADSIZE + wanted) {
-				binary_unpack(L, userdata->buffer + HEADSIZE, wanted);
-				userdata->index = 0;
+			if (buffer_tell(userdata->incoming) >= HEADSIZE + bodysize) {
+				binary_unpack(L, buffer_pointer(userdata->incoming) + HEADSIZE, bodysize);
+				buffer_seek(userdata->incoming, 0);
 				break;
 			}
 		}
