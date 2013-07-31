@@ -222,7 +222,7 @@ static int sendpack(lua_State *L, p_buffer buf, size_t *sent) {
     int err = IO_DONE;
 	t_userdata* userdata = (t_userdata*)buf->userdata;
 	
-	if (buffer_tell(userdata->outgoing) == 0 || buffer_tell(userdata->outgoing) == userdata->sent) {
+	if (buffer_tell(userdata->outgoing) == userdata->sent) {
 		size_t size;
 		userdata->sent = 0;
 		buffer_seek(userdata->outgoing, HEADSIZE);
