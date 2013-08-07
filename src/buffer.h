@@ -44,5 +44,6 @@ int buffer_meth_receive(lua_State *L, p_buffer buf);
 int buffer_meth_getstats(lua_State *L, p_buffer buf);
 int buffer_meth_setstats(lua_State *L, p_buffer buf);
 int buffer_isempty(p_buffer buf);
+int buffer_meth_push(lua_State *L, p_buffer buf);
 
 #endif /* BUF_H */

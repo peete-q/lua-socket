@@ -36,6 +36,7 @@ static int meth_settimeout(lua_State *L);
 static int meth_getfd(lua_State *L);
 static int meth_setfd(lua_State *L);
 static int meth_dirty(lua_State *L);
+static int meth_push(lua_State *L);
 
 /* tcp object methods */
 static luaL_reg tcp[] = {
@@ -54,6 +55,7 @@ static luaL_reg tcp[] = {
     {"listen",      meth_listen},
     {"receive",     meth_receive},
     {"send",        meth_send},
+    {"push",        meth_push},
     {"setfd",       meth_setfd},
     {"setoption",   meth_setoption},
     {"setpeername", meth_connect},
@@ -102,6 +104,12 @@ int tcp_open(lua_State *L)
 /*-------------------------------------------------------------------------*\
 * Just call buffered IO methods
 \*-------------------------------------------------------------------------*/
+static int meth_push(lua_State *L) {
+    p_tcp tcp = (p_tcp) auxiliar_checkclass(L, "tcp{client}", 1);
+    lua_pushboolean(L, buffer_meth_push(L, &tcp->buf));
+	return 1;
+}
+
 static int meth_send(lua_State *L) {
     p_tcp tcp = (p_tcp) auxiliar_checkclass(L, "tcp{client}", 1);
     return buffer_meth_send(L, &tcp->buf);

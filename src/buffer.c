@@ -33,7 +33,7 @@ static int sendpack(lua_State *L, p_buffer buf, size_t *sent);
 typedef struct t_userdata_ {
 	struct buffer* outgoing;
 	struct buffer* incoming;
-	size_t sent;
+	size_t limit;
 } t_userdata;
 
 #define HEADSIZE sizeof(size_t)
@@ -61,7 +61,7 @@ void buffer_init(p_buffer buf, p_io io, p_timeout tm) {
     buf->birthday = timeout_gettime();
 	
 	t_userdata* userdata = (t_userdata*)malloc(sizeof(t_userdata) + INITSIZE);
-	userdata->sent = 0;
+	userdata->limit = 8192;
 	userdata->outgoing = buffer_new(INITSIZE);
 	userdata->incoming = buffer_new(INITSIZE);
 	buf->userdata = userdata;
@@ -77,16 +77,19 @@ int buffer_meth_getstats(lua_State *L, p_buffer buf) {
     lua_pushnumber(L, timeout_gettime() - buf->birthday);
     lua_pushnumber(L, buffer_size(userdata->incoming));
     lua_pushnumber(L, buffer_size(userdata->outgoing));
-    return 5;
+    lua_pushnumber(L, userdata->limit);
+    return 6;
 }
 
 /*-------------------------------------------------------------------------*\
 * object:setstats() interface
 \*-------------------------------------------------------------------------*/
 int buffer_meth_setstats(lua_State *L, p_buffer buf) {
+	t_userdata* userdata = (t_userdata*)buf->userdata;
     buf->received = (long) luaL_optnumber(L, 2, buf->received); 
     buf->sent = (long) luaL_optnumber(L, 3, buf->sent); 
     if (lua_isnumber(L, 4)) buf->birthday = timeout_gettime() - lua_tonumber(L, 4);
+    if (lua_isnumber(L, 5)) userdata->limit = lua_tonumber(L, 5);
     lua_pushnumber(L, 1);
     return 1;
 }
@@ -101,7 +104,7 @@ int buffer_meth_send(lua_State *L, p_buffer buf) {
 	const char *data;
 	long start = 1, end = -1;
     p_timeout tm = timeout_markstart(buf->tm);
-	if (lua_istable(L, 2)) {
+	if (top == 1) {
 		err = sendpack(L, buf, &sent);
 		goto end;
 	}
@@ -221,22 +224,25 @@ static int sendraw(p_buffer buf, const char *data, size_t count, size_t *sent) {
 static int sendpack(lua_State *L, p_buffer buf, size_t *sent) {
     int err = IO_DONE;
 	t_userdata* userdata = (t_userdata*)buf->userdata;
+	const char* ptr = buffer_pointer(userdata->outgoing);
+	size_t pos = buffer_tell(userdata->outgoing);
 	
-	if (buffer_tell(userdata->outgoing) == userdata->sent) {
-		size_t size;
-		userdata->sent = 0;
-		buffer_seek(userdata->outgoing, HEADSIZE);
-		binary_pack(L, userdata->outgoing, 2, 1);
-		size = buffer_tell(userdata->outgoing) - HEADSIZE;
-		buffer_write(userdata->outgoing, 0, &size, HEADSIZE);
-	}
-	
-	err = sendraw(buf, 
-		buffer_pointer(userdata->outgoing) + userdata->sent,
-		buffer_tell(userdata->outgoing) - userdata->sent,
-		sent);
-	userdata->sent += *sent;
+	err = sendraw(buf, ptr, pos, sent);
+	memcpy(ptr, ptr + *sent, pos - *sent);
+	buffer_seek(userdata->outgoing, pos - *sent);
 	return err;
+}
+
+int buffer_meth_push(lua_State *L, p_buffer buf) {
+	t_userdata* userdata = (t_userdata*)buf->userdata;
+	size_t size, pos = buffer_tell(userdata->outgoing);
+	if (pos > userdata->limit)
+		return 0;
+	buffer_seek(userdata->outgoing, pos + HEADSIZE);
+	binary_pack(L, userdata->outgoing, 2, 1);
+	size = buffer_tell(userdata->outgoing) - pos - HEADSIZE;
+	buffer_write(userdata->outgoing, pos, &size, HEADSIZE);
+	return 1;
 }
 
 /*-------------------------------------------------------------------------*\
