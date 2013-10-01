@@ -8,7 +8,7 @@
 #include "lauxlib.h"
 
 #include "buffer.h"
-#include "binary.h"
+#include "stream.h"
 
 /*=========================================================================*\
 * Internal function prototypes
@@ -19,8 +19,8 @@ static int recvall(p_buffer buf, luaL_Buffer *b);
 static int buffer_get(p_buffer buf, const char **data, size_t *count);
 static void buffer_skip(p_buffer buf, size_t count);
 static int sendraw(p_buffer buf, const char *data, size_t count, size_t *sent);
-static int recvpack(lua_State *L, p_buffer buf, size_t *size);
-static int sendpack(lua_State *L, p_buffer buf, size_t *sent);
+static int recvistream(lua_State *L, p_buffer buf, size_t *size);
+static int sendostream(lua_State *L, p_buffer buf, size_t *sent);
 
 /* min and max macros */
 #ifndef MIN
@@ -30,14 +30,11 @@ static int sendpack(lua_State *L, p_buffer buf, size_t *sent);
 #define MAX(x, y) ((x) > (y) ? x : y)
 #endif
 
-typedef struct t_userdata_ {
-	struct buffer* outgoing;
-	struct buffer* incoming;
+struct t_userdata_ {
+	lua_Stream *ostream;
+	lua_Stream *istream;
 	size_t limit;
-} t_userdata;
-
-#define HEADSIZE sizeof(size_t)
-#define INITSIZE 256
+};
 
 /*=========================================================================*\
 * Exported functions
@@ -60,23 +57,39 @@ void buffer_init(p_buffer buf, p_io io, p_timeout tm) {
     buf->received = buf->sent = 0;
     buf->birthday = timeout_gettime();
 	
-	t_userdata* userdata = (t_userdata*)malloc(sizeof(t_userdata) + INITSIZE);
-	userdata->limit = 8192;
-	userdata->outgoing = buffer_new(INITSIZE);
-	userdata->incoming = buffer_new(INITSIZE);
+	t_userdata* userdata = (t_userdata*)malloc(sizeof(t_userdata));
+	userdata->limit = BUF_SIZE;
+	userdata->ostream = NULL;
+	userdata->istream = NULL;
 	buf->userdata = userdata;
 }
 
 /*-------------------------------------------------------------------------*\
 * object:getstats() interface
 \*-------------------------------------------------------------------------*/
+int buffer_close(lua_State *L, p_buffer buf) {
+	t_userdata* userdata = buf->userdata;
+	if (userdata->istream)
+	{
+		stream_unref(L, userdata->istream);
+		userdata->istream = NULL;
+	}
+	if (userdata->ostream)
+	{
+		stream_unref(L, userdata->ostream);
+		userdata->ostream = NULL;
+	}
+	free(userdata);
+	buf->userdata = NULL;
+}
+
 int buffer_meth_getstats(lua_State *L, p_buffer buf) {
-	t_userdata* userdata = (t_userdata*)buf->userdata;
+	t_userdata* userdata = buf->userdata;
     lua_pushnumber(L, buf->received);
     lua_pushnumber(L, buf->sent);
     lua_pushnumber(L, timeout_gettime() - buf->birthday);
-    lua_pushnumber(L, buffer_size(userdata->incoming));
-    lua_pushnumber(L, buffer_size(userdata->outgoing));
+    lua_pushnumber(L, stream_size(userdata->istream));
+    lua_pushnumber(L, stream_size(userdata->ostream));
     lua_pushnumber(L, userdata->limit);
     return 6;
 }
@@ -85,7 +98,7 @@ int buffer_meth_getstats(lua_State *L, p_buffer buf) {
 * object:setstats() interface
 \*-------------------------------------------------------------------------*/
 int buffer_meth_setstats(lua_State *L, p_buffer buf) {
-	t_userdata* userdata = (t_userdata*)buf->userdata;
+	t_userdata* userdata = buf->userdata;
     buf->received = (long) luaL_optnumber(L, 2, buf->received); 
     buf->sent = (long) luaL_optnumber(L, 3, buf->sent); 
     if (lua_isnumber(L, 4)) buf->birthday = timeout_gettime() - lua_tonumber(L, 4);
@@ -105,7 +118,7 @@ int buffer_meth_send(lua_State *L, p_buffer buf) {
 	long start = 1, end = -1;
     p_timeout tm = timeout_markstart(buf->tm);
 	if (top == 1) {
-		err = sendpack(L, buf, &sent);
+		err = sendostream(L, buf, &sent);
 		goto end;
 	}
 	data = luaL_checklstring(L, 2, &size);
@@ -145,14 +158,15 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
     const char *part = luaL_optlstring(L, 3, "", &size);
     p_timeout tm = timeout_markstart(buf->tm);
     if (top == 1) {
-		err = recvpack(L, buf, &size);
+		err = recvistream(L, buf, &size);
 		if (err != IO_DONE) {
 			lua_pushnil(L);
 			lua_pushstring(L, buf->io->error(buf->io->ctx, err));
 			lua_pushnil(L);
 		} else {
-			lua_pushnil(L);
 			lua_pushnumber(L, size);
+			lua_pushnil(L);
+			lua_pushnil(L);
 		}
 		goto end;
     }
@@ -160,7 +174,7 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
      * (useful for concatenating previous partial results) */
     luaL_buffinit(L, &b);
     luaL_addlstring(&b, part, size);
-    /* receive new patterns */
+    /* receive tb patterns */
 	if (!lua_isnumber(L, 2)) {
         const char *p= luaL_optstring(L, 2, "*l");
         if (p[0] == '*' && p[1] == 'l') err = recvline(buf, &b);
@@ -221,62 +235,58 @@ static int sendraw(p_buffer buf, const char *data, size_t count, size_t *sent) {
     return err;
 }
 
-static int sendpack(lua_State *L, p_buffer buf, size_t *sent) {
+static int sendostream(lua_State *L, p_buffer buf, size_t *sent) {
     int err = IO_DONE;
-	t_userdata* userdata = (t_userdata*)buf->userdata;
-	const char* ptr = buffer_pointer(userdata->outgoing);
-	size_t pos = buffer_tell(userdata->outgoing);
-	
-	err = sendraw(buf, ptr, pos, sent);
-	memcpy(ptr, ptr + *sent, pos - *sent);
-	buffer_seek(userdata->outgoing, pos - *sent);
+	t_userdata *userdata = buf->userdata;
+	const char *ptr = stream_ptr(userdata->ostream);
+	size_t size = stream_tell(userdata->ostream);
+	err = sendraw(buf, ptr, size, sent);
+	stream_remove(userdata->ostream, 0, *sent);
 	return err;
 }
 
-int buffer_meth_push(lua_State *L, p_buffer buf) {
-	t_userdata* userdata = (t_userdata*)buf->userdata;
-	size_t size, pos = buffer_tell(userdata->outgoing);
-	if (pos > userdata->limit)
-		return 0;
-	buffer_seek(userdata->outgoing, pos + HEADSIZE);
-	binary_pack(L, userdata->outgoing, 2, 1);
-	size = buffer_tell(userdata->outgoing) - pos - HEADSIZE;
-	buffer_write(userdata->outgoing, pos, &size, HEADSIZE);
+int buffer_meth_setreader(lua_State *L, p_buffer buf) {
+	t_userdata* userdata = buf->userdata;
+	if (userdata->istream)
+		stream_unref(L, userdata->istream);
+	userdata->istream = stream_ref(L, 2);
+	return 0;
+}
+
+int buffer_meth_setwriter(lua_State *L, p_buffer buf) {
+	t_userdata* userdata = buf->userdata;
+	if (userdata->ostream)
+		stream_unref(L, userdata->ostream);
+	userdata->ostream = stream_ref(L, 2);
+	return 0;
+}
+
+int buffer_meth_getreader(lua_State *L, p_buffer buf) {
+	t_userdata* userdata = buf->userdata;
+	stream_push(L, userdata->istream);
+	return 1;
+}
+
+int buffer_meth_getwriter(lua_State *L, p_buffer buf) {
+	t_userdata* userdata = buf->userdata;
+	stream_push(L, userdata->ostream);
 	return 1;
 }
 
 /*-------------------------------------------------------------------------*\
 * Reads a package
 \*-------------------------------------------------------------------------*/
-static int recvpack(lua_State *L, p_buffer buf, size_t *size) {
+static int recvistream(lua_State *L, p_buffer buf, size_t *size) {
     int err = IO_DONE;
-    p_io io = buf->io;
-    p_timeout tm = buf->tm;
-	t_userdata* userdata = (t_userdata*)buf->userdata;
+	t_userdata* userdata = buf->userdata;
+	size_t count;
+	const char *data;
 	
-    while (err == IO_DONE) {
-        size_t pos, got, bodysize;
-		if (buffer_tell(userdata->incoming) < HEADSIZE) {
-			pos = buffer_tell(userdata->incoming);
-			err = io->recv(io->ctx, buffer_pointer(userdata->incoming) + pos, HEADSIZE - pos, &got, tm);
-			buffer_forward(userdata->incoming, got);
-			buf->received += got;
-		}
-		else {
-			bodysize = *(size_t*)buffer_pointer(userdata->incoming);
-			pos = buffer_tell(userdata->incoming);
-			buffer_checksize(userdata->incoming, HEADSIZE + bodysize);
-			err = io->recv(io->ctx, buffer_pointer(userdata->incoming) + pos, bodysize + HEADSIZE - pos, &got, tm);
-			buffer_forward(userdata->incoming, got);
-			buf->received += got;
-			if (buffer_tell(userdata->incoming) >= HEADSIZE + bodysize) {
-				binary_unpack(L, buffer_pointer(userdata->incoming) + HEADSIZE, bodysize);
-				buffer_seek(userdata->incoming, 0);
-				*size = HEADSIZE + bodysize;
-				break;
-			}
-		}
-    }
+	if (stream_tell(userdata->istream) > 0)
+		stream_remove(userdata->istream, 0, stream_tell(userdata->istream));
+	err = buffer_get(buf, &data, &count);
+	stream_write(userdata->istream, data, count);
+	buffer_skip(buf, count);
     return err;
 }
 

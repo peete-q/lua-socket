@@ -36,7 +36,10 @@ static int meth_settimeout(lua_State *L);
 static int meth_getfd(lua_State *L);
 static int meth_setfd(lua_State *L);
 static int meth_dirty(lua_State *L);
-static int meth_push(lua_State *L);
+static int meth_setreader(lua_State *L);
+static int meth_setwriter(lua_State *L);
+static int meth_getreader(lua_State *L);
+static int meth_getwriter(lua_State *L);
 
 /* tcp object methods */
 static luaL_reg tcp[] = {
@@ -55,7 +58,10 @@ static luaL_reg tcp[] = {
     {"listen",      meth_listen},
     {"receive",     meth_receive},
     {"send",        meth_send},
-    {"push",        meth_push},
+    {"setreader",   meth_setreader},
+    {"setwriter",   meth_setwriter},
+    {"getreader",   meth_getreader},
+    {"getwriter",   meth_getwriter},
     {"setfd",       meth_setfd},
     {"setoption",   meth_setoption},
     {"setpeername", meth_connect},
@@ -104,10 +110,24 @@ int tcp_open(lua_State *L)
 /*-------------------------------------------------------------------------*\
 * Just call buffered IO methods
 \*-------------------------------------------------------------------------*/
-static int meth_push(lua_State *L) {
+static int meth_setreader(lua_State *L) {
     p_tcp tcp = (p_tcp) auxiliar_checkclass(L, "tcp{client}", 1);
-    lua_pushboolean(L, buffer_meth_push(L, &tcp->buf));
-	return 1;
+	return buffer_meth_setreader(L, &tcp->buf);
+}
+
+static int meth_setwriter(lua_State *L) {
+    p_tcp tcp = (p_tcp) auxiliar_checkclass(L, "tcp{client}", 1);
+	return buffer_meth_setwriter(L, &tcp->buf);
+}
+
+static int meth_getreader(lua_State *L) {
+    p_tcp tcp = (p_tcp) auxiliar_checkclass(L, "tcp{client}", 1);
+	return buffer_meth_getreader(L, &tcp->buf);
+}
+
+static int meth_getwriter(lua_State *L) {
+    p_tcp tcp = (p_tcp) auxiliar_checkclass(L, "tcp{client}", 1);
+	return buffer_meth_getwriter(L, &tcp->buf);
 }
 
 static int meth_send(lua_State *L) {
@@ -239,6 +259,7 @@ static int meth_connect(lua_State *L)
 static int meth_close(lua_State *L)
 {
     p_tcp tcp = (p_tcp) auxiliar_checkgroup(L, "tcp{any}", 1);
+	buffer_close(L, &tcp->buf);
     socket_destroy(&tcp->sock);
     lua_pushnumber(L, 1);
     return 1;

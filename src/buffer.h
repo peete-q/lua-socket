@@ -25,6 +25,7 @@
 /* buffer size in bytes */
 #define BUF_SIZE 8192
 
+typedef struct t_userdata_ t_userdata;
 /* buffer control structure */
 typedef struct t_buffer_ {
     double birthday;        /* throttle support info: creation time, */
@@ -33,7 +34,7 @@ typedef struct t_buffer_ {
     p_timeout tm;           /* timeout management for this buffer */
 	size_t first, last;     /* index of first and last bytes of stored data */
 	char data[BUF_SIZE];    /* storage space for buffer data */
-	void* userdata;
+	t_userdata* userdata;
 } t_buffer;
 typedef t_buffer *p_buffer;
 
@@ -44,6 +45,10 @@ int buffer_meth_receive(lua_State *L, p_buffer buf);
 int buffer_meth_getstats(lua_State *L, p_buffer buf);
 int buffer_meth_setstats(lua_State *L, p_buffer buf);
 int buffer_isempty(p_buffer buf);
-int buffer_meth_push(lua_State *L, p_buffer buf);
+int buffer_meth_setreader(lua_State *L, p_buffer buf);
+int buffer_meth_setwriter(lua_State *L, p_buffer buf);
+int buffer_meth_getreader(lua_State *L, p_buffer buf);
+int buffer_meth_getwriter(lua_State *L, p_buffer buf);
+int buffer_close(lua_State *L, p_buffer buf);
 
 #endif /* BUF_H */
