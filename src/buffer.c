@@ -174,7 +174,7 @@ int buffer_meth_receive(lua_State *L, p_buffer buf) {
      * (useful for concatenating previous partial results) */
     luaL_buffinit(L, &b);
     luaL_addlstring(&b, part, size);
-    /* receive tb patterns */
+    /* receive new patterns */
 	if (!lua_isnumber(L, 2)) {
         const char *p= luaL_optstring(L, 2, "*l");
         if (p[0] == '*' && p[1] == 'l') err = recvline(buf, &b);
@@ -239,7 +239,7 @@ static int sendostream(lua_State *L, p_buffer buf, size_t *sent) {
     int err = IO_DONE;
 	t_userdata *userdata = buf->userdata;
 	const char *ptr = stream_ptr(userdata->ostream);
-	size_t size = stream_tell(userdata->ostream);
+	size_t size = stream_size(userdata->ostream);
 	err = sendraw(buf, ptr, size, sent);
 	stream_remove(userdata->ostream, 0, *sent);
 	return err;
