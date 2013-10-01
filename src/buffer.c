@@ -51,13 +51,14 @@ int buffer_open(lua_State *L) {
 * Initializes C structure 
 \*-------------------------------------------------------------------------*/
 void buffer_init(p_buffer buf, p_io io, p_timeout tm) {
+	t_userdata* userdata;
 	buf->first = buf->last = 0;
     buf->io = io;
     buf->tm = tm;
     buf->received = buf->sent = 0;
     buf->birthday = timeout_gettime();
 	
-	t_userdata* userdata = (t_userdata*)malloc(sizeof(t_userdata));
+	userdata = (t_userdata*)malloc(sizeof(t_userdata));
 	userdata->limit = BUF_SIZE;
 	userdata->ostream = NULL;
 	userdata->istream = NULL;
@@ -68,19 +69,17 @@ void buffer_init(p_buffer buf, p_io io, p_timeout tm) {
 * object:getstats() interface
 \*-------------------------------------------------------------------------*/
 int buffer_close(lua_State *L, p_buffer buf) {
-	t_userdata* userdata = buf->userdata;
-	if (userdata->istream)
+	if (buf->userdata)
 	{
-		stream_unref(L, userdata->istream);
-		userdata->istream = NULL;
+		t_userdata* userdata = buf->userdata;
+		if (userdata->istream)
+			stream_unref(L, userdata->istream);
+		if (userdata->ostream)
+			stream_unref(L, userdata->ostream);
+		free(userdata);
+		buf->userdata = NULL;
 	}
-	if (userdata->ostream)
-	{
-		stream_unref(L, userdata->ostream);
-		userdata->ostream = NULL;
-	}
-	free(userdata);
-	buf->userdata = NULL;
+	return 1;
 }
 
 int buffer_meth_getstats(lua_State *L, p_buffer buf) {
