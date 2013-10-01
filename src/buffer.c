@@ -33,7 +33,6 @@ static int sendostream(lua_State *L, p_buffer buf, size_t *sent);
 struct t_userdata_ {
 	lua_Stream *ostream;
 	lua_Stream *istream;
-	size_t limit;
 };
 
 /*=========================================================================*\
@@ -59,7 +58,6 @@ void buffer_init(p_buffer buf, p_io io, p_timeout tm) {
     buf->birthday = timeout_gettime();
 	
 	userdata = (t_userdata*)malloc(sizeof(t_userdata));
-	userdata->limit = BUF_SIZE;
 	userdata->ostream = NULL;
 	userdata->istream = NULL;
 	buf->userdata = userdata;
@@ -89,8 +87,7 @@ int buffer_meth_getstats(lua_State *L, p_buffer buf) {
     lua_pushnumber(L, timeout_gettime() - buf->birthday);
     lua_pushnumber(L, stream_size(userdata->istream));
     lua_pushnumber(L, stream_size(userdata->ostream));
-    lua_pushnumber(L, userdata->limit);
-    return 6;
+    return 5;
 }
 
 /*-------------------------------------------------------------------------*\
@@ -101,7 +98,6 @@ int buffer_meth_setstats(lua_State *L, p_buffer buf) {
     buf->received = (long) luaL_optnumber(L, 2, buf->received); 
     buf->sent = (long) luaL_optnumber(L, 3, buf->sent); 
     if (lua_isnumber(L, 4)) buf->birthday = timeout_gettime() - lua_tonumber(L, 4);
-    if (lua_isnumber(L, 5)) userdata->limit = lua_tonumber(L, 5);
     lua_pushnumber(L, 1);
     return 1;
 }
