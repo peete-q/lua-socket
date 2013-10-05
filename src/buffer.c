@@ -80,6 +80,12 @@ int buffer_close(lua_State *L, p_buffer buf) {
 	return 1;
 }
 
+int buffer_checkclosed(lua_State *L, p_buffer buf) {
+	if (!buf->userdata)
+		luaL_error(L, "socket closed");
+	return 1;
+}
+
 int buffer_meth_getstats(lua_State *L, p_buffer buf) {
 	t_userdata* userdata = buf->userdata;
     lua_pushnumber(L, buf->received);
@@ -258,12 +264,14 @@ int buffer_meth_setwriter(lua_State *L, p_buffer buf) {
 
 int buffer_meth_getreader(lua_State *L, p_buffer buf) {
 	t_userdata* userdata = buf->userdata;
+	buffer_checkclosed(L, buf);
 	stream_push(L, userdata->istream);
 	return 1;
 }
 
 int buffer_meth_getwriter(lua_State *L, p_buffer buf) {
 	t_userdata* userdata = buf->userdata;
+	buffer_checkclosed(L, buf);
 	stream_push(L, userdata->ostream);
 	return 1;
 }
@@ -274,14 +282,13 @@ int buffer_meth_getwriter(lua_State *L, p_buffer buf) {
 static int recvistream(lua_State *L, p_buffer buf, size_t *size) {
     int err = IO_DONE;
 	t_userdata* userdata = buf->userdata;
-	size_t count;
 	const char *data;
 	
 	if (stream_tell(userdata->istream) > 0)
 		stream_remove(userdata->istream, 0, stream_tell(userdata->istream));
-	err = buffer_get(buf, &data, &count);
-	stream_write(userdata->istream, data, count);
-	buffer_skip(buf, count);
+	err = buffer_get(buf, &data, size);
+	stream_write(userdata->istream, data, *size);
+	buffer_skip(buf, *size);
     return err;
 }
 
